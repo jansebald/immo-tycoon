@@ -18,7 +18,11 @@ import {
   Zap,
   Megaphone,
   HardHat,
-  Shield
+  Shield,
+  DollarSign,
+  X,
+  User,
+  Star
 } from 'lucide-react';
 
 // Typen
@@ -34,6 +38,18 @@ interface Property {
   renovationCost: number;
   potentialRent: number;
   status: PropertyStatus;
+  imageUrl: string;
+  totalInvested?: number; // Wie viel wurde insgesamt investiert
+  tenant?: Tenant | null;
+}
+
+interface Tenant {
+  id: string;
+  name: string;
+  type: 'student' | 'family' | 'startup' | 'senior' | 'professional';
+  rentOffer: number; // Prozent von potentialRent (80-120%)
+  riskLevel: number; // 1-10 (höher = riskanter)
+  minCondition: number; // Mindest-Zustand
 }
 
 interface GameEvent {
@@ -63,6 +79,7 @@ interface GameState {
   eventLog: GameEvent[];
   upgrades: Upgrade[];
   eventCounter: number;
+  nextPropertyId?: number;
 }
 
 const INITIAL_MARKET_PROPERTIES: Property[] = [
@@ -73,7 +90,9 @@ const INITIAL_MARKET_PROPERTIES: Property[] = [
     condition: 30,
     renovationCost: 2000,
     potentialRent: 250,
-    status: 'for_sale'
+    status: 'for_sale',
+    imageUrl: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=400&h=200&fit=crop&auto=format&q=80',
+    totalInvested: 0
   },
   {
     id: 2,
@@ -82,7 +101,9 @@ const INITIAL_MARKET_PROPERTIES: Property[] = [
     condition: 20,
     renovationCost: 5000,
     potentialRent: 650,
-    status: 'for_sale'
+    status: 'for_sale',
+    imageUrl: 'https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=400&h=200&fit=crop&auto=format&q=80',
+    totalInvested: 0
   },
   {
     id: 3,
@@ -91,7 +112,9 @@ const INITIAL_MARKET_PROPERTIES: Property[] = [
     condition: 40,
     renovationCost: 8000,
     potentialRent: 1200,
-    status: 'for_sale'
+    status: 'for_sale',
+    imageUrl: 'https://images.unsplash.com/photo-1518780664697-55e3ad937233?w=400&h=200&fit=crop&auto=format&q=80',
+    totalInvested: 0
   },
   {
     id: 4,
@@ -100,7 +123,9 @@ const INITIAL_MARKET_PROPERTIES: Property[] = [
     condition: 25,
     renovationCost: 12000,
     potentialRent: 1800,
-    status: 'for_sale'
+    status: 'for_sale',
+    imageUrl: 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=400&h=200&fit=crop&auto=format&q=80',
+    totalInvested: 0
   }
 ];
 
@@ -143,6 +168,14 @@ const INITIAL_UPGRADES: Upgrade[] = [
   }
 ];
 
+const TENANT_TYPES = [
+  { type: 'student' as const, name: 'Student', rentRange: [70, 85], riskRange: [6, 9], minCondition: 60 },
+  { type: 'family' as const, name: 'Familie', rentRange: [95, 105], riskRange: [3, 5], minCondition: 85 },
+  { type: 'startup' as const, name: 'Start-up', rentRange: [110, 130], riskRange: [7, 10], minCondition: 75 },
+  { type: 'senior' as const, name: 'Senior', rentRange: [80, 95], riskRange: [2, 4], minCondition: 80 },
+  { type: 'professional' as const, name: 'Berufstätig', rentRange: [100, 115], riskRange: [2, 5], minCondition: 90 }
+];
+
 const EVENTS = [
   { message: '🎉 Marktboom! Alle Mieten steigen um 10%', type: 'positive' as const, effect: 'rent_increase' },
   { message: '📈 Wirtschaftswachstum! +2000 € Bonus', type: 'positive' as const, effect: 'bonus' },
@@ -158,6 +191,9 @@ const EVENTS = [
 export default function ImmoTycoon() {
   // UI State
   const [activeTab, setActiveTab] = useState<TabType>('properties');
+  const [showTenantModal, setShowTenantModal] = useState(false);
+  const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
+  const [tenantCandidates, setTenantCandidates] = useState<Tenant[]>([]);
 
   // Globaler Spiel-Status
   const [cash, setCash] = useState(25000);
@@ -169,6 +205,7 @@ export default function ImmoTycoon() {
   const [eventLog, setEventLog] = useState<GameEvent[]>([]);
   const [eventCounter, setEventCounter] = useState(1);
   const [upgrades, setUpgrades] = useState<Upgrade[]>(INITIAL_UPGRADES);
+  const [nextPropertyId, setNextPropertyId] = useState(100); // Für eindeutige IDs
 
   // Icon-Mapping Funktion
   const getIconComponent = (iconName: string): IconType => {
@@ -181,6 +218,29 @@ export default function ImmoTycoon() {
     return iconMap[iconName] || Hammer;
   };
 
+  // Fix für Properties ohne imageUrl
+  const ensureImageUrl = (property: Property): Property => {
+    if (!property.imageUrl || property.imageUrl.trim() === '') {
+      // Fallback-Bild basierend auf Namen
+      const fallbackImages: Record<string, string> = {
+        'Garage': 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=400&h=200&fit=crop&auto=format&q=80',
+        'Apartment': 'https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=400&h=200&fit=crop&auto=format&q=80',
+        'Reihenhaus': 'https://images.unsplash.com/photo-1518780664697-55e3ad937233?w=400&h=200&fit=crop&auto=format&q=80',
+        'Loft': 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=400&h=200&fit=crop&auto=format&q=80'
+      };
+      
+      for (const [key, url] of Object.entries(fallbackImages)) {
+        if (property.name.includes(key)) {
+          return { ...property, imageUrl: url };
+        }
+      }
+      
+      // Standard-Fallback
+      return { ...property, imageUrl: 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=400&h=200&fit=crop&auto=format&q=80' };
+    }
+    return property;
+  };
+
   // LocalStorage laden beim Start
   useEffect(() => {
     const savedGame = localStorage.getItem('immoTycoonSave');
@@ -191,8 +251,10 @@ export default function ImmoTycoon() {
         setDay(gameState.day);
         setWeek(gameState.week);
         setMonthlyIncome(gameState.monthlyIncome);
-        setPortfolio(gameState.portfolio);
-        setMarketProperties(gameState.marketProperties);
+        
+        // Properties mit imageUrl-Fix laden
+        setPortfolio(gameState.portfolio.map(ensureImageUrl));
+        setMarketProperties(gameState.marketProperties.map(ensureImageUrl));
         
         // EventCounter richtig setzen (höchste ID + 1)
         let nextCounter = 1;
@@ -203,6 +265,11 @@ export default function ImmoTycoon() {
           nextCounter = gameState.eventCounter;
         }
         setEventCounter(nextCounter);
+        
+        // Property ID Counter laden
+        if (gameState.nextPropertyId) {
+          setNextPropertyId(gameState.nextPropertyId);
+        }
         
         // Event Log mit "Geladen"-Nachricht setzen
         const loadEvent: GameEvent = {
@@ -232,10 +299,11 @@ export default function ImmoTycoon() {
       marketProperties,
       eventLog,
       upgrades,
-      eventCounter
+      eventCounter,
+      nextPropertyId
     };
     localStorage.setItem('immoTycoonSave', JSON.stringify(gameState));
-  }, [cash, day, week, monthlyIncome, portfolio, marketProperties, eventLog, upgrades, eventCounter]);
+  }, [cash, day, week, monthlyIncome, portfolio, marketProperties, eventLog, upgrades, eventCounter, nextPropertyId]);
 
   // Hilfsfunktion: Prüfe ob Upgrade gekauft wurde
   const hasUpgrade = (upgradeId: string) => {
@@ -251,13 +319,39 @@ export default function ImmoTycoon() {
       timestamp: Date.now()
     };
     setEventCounter(eventCounter + 1);
-    setEventLog(prev => [newEvent, ...prev].slice(0, 5)); // Nur die letzten 5 Events
+    setEventLog(prev => [newEvent, ...prev].slice(0, 5));
+  };
+
+  // Generiere zufällige Mieter-Bewerber
+  const generateTenantCandidates = (property: Property): Tenant[] => {
+    const candidates: Tenant[] = [];
+    const shuffled = [...TENANT_TYPES].sort(() => Math.random() - 0.5).slice(0, 3);
+    
+    shuffled.forEach((template, index) => {
+      const rentOffer = Math.floor(Math.random() * (template.rentRange[1] - template.rentRange[0]) + template.rentRange[0]);
+      const riskLevel = Math.floor(Math.random() * (template.riskRange[1] - template.riskRange[0]) + template.riskRange[0]);
+      
+      candidates.push({
+        id: `${property.id}-tenant-${index}`,
+        name: `${template.name} ${String.fromCharCode(65 + index)}`,
+        type: template.type,
+        rentOffer,
+        riskLevel,
+        minCondition: template.minCondition
+      });
+    });
+    
+    return candidates;
   };
 
   // Monatliches Einkommen berechnen (mit Marketing-Boost)
   const calculateMonthlyIncome = () => {
-    const rentedProperties = portfolio.filter(p => p.status === 'rented');
-    let total = rentedProperties.reduce((sum, p) => sum + p.potentialRent, 0);
+    const rentedProperties = portfolio.filter(p => p.status === 'rented' && p.tenant);
+    let total = rentedProperties.reduce((sum, p) => {
+      const baseRent = p.potentialRent;
+      const tenantModifier = p.tenant ? (p.tenant.rentOffer / 100) : 1;
+      return sum + Math.round(baseRent * tenantModifier);
+    }, 0);
     
     // Marketing Upgrade: +10% Miete
     if (hasUpgrade('marketing')) {
@@ -270,17 +364,22 @@ export default function ImmoTycoon() {
   // Renovierungskosten berechnen (mit Rabatt)
   const getRenovationCost = (baseCost: number) => {
     if (hasUpgrade('cheap_labor')) {
-      return Math.round(baseCost * 0.8); // 20% Rabatt
+      return Math.round(baseCost * 0.8);
     }
     return baseCost;
   };
 
+  // Marktwert berechnen
+  const calculateMarketValue = (property: Property): number => {
+    const invested = property.totalInvested || 0;
+    const marketFactor = 1 + (Math.random() * 0.2 + 0.1); // 10-30% Gewinn
+    return Math.round((property.purchasePrice + invested) * marketFactor);
+  };
+
   // Event auslösen
   const triggerRandomEvent = () => {
-    // 30% Chance auf ein Event
     if (Math.random() > 0.3) return;
 
-    // Filtere negative Events wenn Versicherung aktiv ist
     let availableEvents = EVENTS;
     if (hasUpgrade('insurance')) {
       availableEvents = EVENTS.filter(e => e.type !== 'negative');
@@ -289,7 +388,6 @@ export default function ImmoTycoon() {
     const event = availableEvents[Math.floor(Math.random() * availableEvents.length)];
     addEventToLog(event.message, event.type);
 
-    // Event-Effekte anwenden
     switch (event.effect) {
       case 'rent_increase':
         setPortfolio(prev => prev.map(p => ({
@@ -305,7 +403,7 @@ export default function ImmoTycoon() {
       case 'double_rent':
         const rentedProps = portfolio.filter(p => p.status === 'rented');
         if (rentedProps.length > 0) {
-          const doubleRent = rentedProps.reduce((sum, p) => sum + p.potentialRent, 0);
+          const doubleRent = calculateMonthlyIncome();
           setCash(prev => prev + doubleRent);
         }
         break;
@@ -319,7 +417,7 @@ export default function ImmoTycoon() {
         if (rentedProperties.length > 0) {
           const randomProp = rentedProperties[Math.floor(Math.random() * rentedProperties.length)];
           setPortfolio(prev => prev.map(p => 
-            p.id === randomProp.id ? { ...p, status: 'owned' as PropertyStatus } : p
+            p.id === randomProp.id ? { ...p, status: 'owned' as PropertyStatus, tenant: null } : p
           ));
         }
         break;
@@ -353,7 +451,7 @@ export default function ImmoTycoon() {
 
     const needsRenovation = portfolio.filter(p => p.condition < 100 && p.status !== 'rented');
     if (needsRenovation.length > 0) {
-      const property = needsRenovation[0]; // Erstes Objekt das Renovierung braucht
+      const property = needsRenovation[0];
       setPortfolio(prev => prev.map(p => 
         p.id === property.id 
           ? { ...p, condition: Math.min(100, p.condition + 30) } 
@@ -375,6 +473,7 @@ export default function ImmoTycoon() {
       setMarketProperties(INITIAL_MARKET_PROPERTIES);
       setEventLog([]);
       setUpgrades(INITIAL_UPGRADES);
+      setNextPropertyId(100);
       addEventToLog('🎮 Neues Spiel gestartet!', 'neutral');
     }
   };
@@ -383,7 +482,11 @@ export default function ImmoTycoon() {
   const buyProperty = (property: Property) => {
     if (cash >= property.purchasePrice) {
       setCash(cash - property.purchasePrice);
-      setPortfolio([...portfolio, { ...property, status: 'owned' }]);
+      setPortfolio([...portfolio, { 
+        ...property, 
+        status: 'owned',
+        totalInvested: property.purchasePrice
+      }]);
       setMarketProperties(marketProperties.filter(p => p.id !== property.id));
       addEventToLog(`🏠 ${property.name} gekauft für ${property.purchasePrice.toLocaleString('de-DE')} €`, 'positive');
     }
@@ -401,13 +504,17 @@ export default function ImmoTycoon() {
       setCash(cash - actualCost);
       setPortfolio(portfolio.map(p => 
         p.id === propertyId 
-          ? { ...p, condition: Math.min(100, p.condition + 25), status: 'renovating' as PropertyStatus }
+          ? { 
+              ...p, 
+              condition: Math.min(100, p.condition + 25), 
+              status: 'renovating' as PropertyStatus,
+              totalInvested: (p.totalInvested || 0) + actualCost
+            }
           : p
       ));
 
       addEventToLog(`🔨 ${property.name} wird renoviert (+25%)`, 'neutral');
 
-      // Nach kurzer "Arbeit" wieder auf owned setzen
       setTimeout(() => {
         setPortfolio(prev => prev.map(p => 
           p.id === propertyId && p.condition === 100
@@ -420,22 +527,64 @@ export default function ImmoTycoon() {
     }
   };
 
-  // Vermieten-Funktion
-  const rentProperty = (propertyId: number) => {
-    const property = portfolio.find(p => p.id === propertyId);
-    if (!property || property.condition < 100) return;
+  // Mieter-Auswahl öffnen
+  const openTenantSelection = (property: Property) => {
+    if (property.condition < 100) return;
+    
+    const candidates = generateTenantCandidates(property);
+    setTenantCandidates(candidates);
+    setSelectedProperty(property);
+    setShowTenantModal(true);
+  };
+
+  // Mieter auswählen
+  const selectTenant = (tenant: Tenant) => {
+    if (!selectedProperty) return;
+
+    if (selectedProperty.condition < tenant.minCondition) {
+      addEventToLog(`❌ ${tenant.name} lehnt ab - Zustand zu niedrig!`, 'negative');
+      return;
+    }
 
     setPortfolio(portfolio.map(p => 
-      p.id === propertyId 
-        ? { ...p, status: 'rented' }
+      p.id === selectedProperty.id 
+        ? { ...p, status: 'rented' as PropertyStatus, tenant }
         : p
     ));
 
-    const rentAmount = hasUpgrade('marketing') 
-      ? Math.round(property.potentialRent * 1.1) 
-      : property.potentialRent;
+    const actualRent = Math.round(selectedProperty.potentialRent * (tenant.rentOffer / 100));
+    addEventToLog(`👥 ${tenant.name} eingezogen! ${actualRent} €/Monat`, 'positive');
+    setShowTenantModal(false);
+    setSelectedProperty(null);
+  };
 
-    addEventToLog(`👥 ${property.name} erfolgreich vermietet (+${rentAmount} €/Monat)`, 'positive');
+  // Immobilie verkaufen
+  const sellProperty = (propertyId: number) => {
+    const property = portfolio.find(p => p.id === propertyId);
+    if (!property) return;
+
+    const salePrice = calculateMarketValue(property);
+    
+    if (confirm(`${property.name} für ${salePrice.toLocaleString('de-DE')} € verkaufen?`)) {
+      setCash(cash + salePrice);
+      setPortfolio(portfolio.filter(p => p.id !== propertyId));
+      
+      // Immobilie zurück zum Markt (mit NEUER eindeutiger ID)
+      const newProperty: Property = {
+        ...property,
+        id: nextPropertyId, // NEUE eindeutige ID
+        status: 'for_sale' as PropertyStatus,
+        condition: Math.max(30, property.condition - 20),
+        purchasePrice: Math.round(salePrice * 0.85),
+        tenant: null,
+        totalInvested: 0
+      };
+      
+      setMarketProperties([...marketProperties, newProperty]);
+      setNextPropertyId(nextPropertyId + 1);
+      
+      addEventToLog(`💰 ${property.name} verkauft für ${salePrice.toLocaleString('de-DE')} €!`, 'positive');
+    }
   };
 
   // Upgrade kaufen
@@ -452,18 +601,11 @@ export default function ImmoTycoon() {
 
   // Zeit voranschreiten
   const nextMonth = () => {
-    // Auto-Renovierung durch Bauleiter
     autoRenovate();
-
-    // Mieteinnahmen gutschreiben
     const totalRent = calculateMonthlyIncome();
     setCash(cash + totalRent);
-
-    // Zeit aktualisieren
     setDay(day + 30);
     setWeek(week + 4);
-
-    // Event auslösen (30% Chance)
     triggerRandomEvent();
 
     if (totalRent > 0) {
@@ -516,12 +658,260 @@ export default function ImmoTycoon() {
     );
   };
 
+  // Property Card Komponente
+  const PropertyCard = ({ property, isMarket }: { property: Property; isMarket: boolean }) => (
+    <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden hover:border-slate-700 transition-colors">
+      {/* Property Image */}
+      <div className="relative w-full h-32 lg:h-40 overflow-hidden bg-slate-800">
+        {property.imageUrl && property.imageUrl.trim() !== '' ? (
+          <img 
+            src={property.imageUrl} 
+            alt={property.name}
+            className="w-full h-full object-cover"
+            onError={(e) => {
+              const target = e.target as HTMLImageElement;
+              target.style.display = 'none';
+            }}
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-slate-600">
+            <Building2 size={48} />
+          </div>
+        )}
+        <div className="absolute top-2 right-2 z-10">
+          <StatusBadge status={property.status} />
+        </div>
+      </div>
+
+      {/* Property Info */}
+      <div className="p-4 lg:p-5">
+        <div className="flex items-start justify-between mb-3 gap-2">
+          <h3 className="text-base lg:text-lg font-semibold truncate flex-1">{property.name}</h3>
+          <div className="text-right flex-shrink-0">
+            <p className="text-lg lg:text-xl font-bold text-emerald-400">
+              {isMarket ? property.purchasePrice.toLocaleString('de-DE') : calculateMarketValue(property).toLocaleString('de-DE')} €
+            </p>
+            <p className="text-[10px] lg:text-xs text-slate-500">{isMarket ? 'Kaufpreis' : 'Marktwert'}</p>
+          </div>
+        </div>
+
+        {property.tenant && (
+          <div className="mb-3 p-2 bg-purple-500/10 border border-purple-500/30 rounded-lg">
+            <p className="text-xs text-purple-400 flex items-center gap-1">
+              <User size={12} />
+              Mieter: {property.tenant.name}
+            </p>
+          </div>
+        )}
+
+        <ConditionBar condition={property.condition} />
+
+        <div className="grid grid-cols-2 gap-2 lg:gap-3 mt-3 text-sm">
+          <div className="bg-slate-800 p-2 lg:p-3 rounded-lg">
+            <p className="text-slate-400 text-[10px] lg:text-xs mb-1">Renovierung</p>
+            <p className="font-semibold text-xs lg:text-sm">{getRenovationCost(property.renovationCost).toLocaleString('de-DE')} €</p>
+          </div>
+          <div className="bg-slate-800 p-2 lg:p-3 rounded-lg">
+            <p className="text-slate-400 text-[10px] lg:text-xs mb-1">Miete/Monat</p>
+            <p className="font-semibold text-emerald-400 text-xs lg:text-sm">
+              {property.tenant 
+                ? Math.round(property.potentialRent * (property.tenant.rentOffer / 100)).toLocaleString('de-DE')
+                : property.potentialRent.toLocaleString('de-DE')
+              } €
+            </p>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="space-y-2 mt-3 lg:mt-4">
+          {isMarket ? (
+            <button
+              onClick={() => buyProperty(property)}
+              disabled={cash < property.purchasePrice}
+              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed px-4 py-2.5 rounded-lg text-sm lg:text-base font-medium transition-colors flex items-center justify-center gap-2"
+            >
+              {cash < property.purchasePrice ? (
+                <>
+                  <AlertCircle size={16} />
+                  Nicht genug Geld
+                </>
+              ) : (
+                <>
+                  <ShoppingCart size={16} />
+                  Kaufen
+                </>
+              )}
+            </button>
+          ) : (
+            <>
+              <div className="flex gap-2">
+                {property.condition < 100 && property.status !== 'rented' && (
+                  <button
+                    onClick={() => renovateProperty(property.id)}
+                    disabled={cash < getRenovationCost(property.renovationCost) || property.status === 'renovating'}
+                    className="flex-1 bg-amber-600 hover:bg-amber-700 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed px-3 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <Hammer size={16} />
+                    <span className="truncate">{property.status === 'renovating' ? 'Wird renoviert...' : 'Renovieren'}</span>
+                  </button>
+                )}
+
+                {property.condition === 100 && property.status !== 'rented' && (
+                  <button
+                    onClick={() => openTenantSelection(property)}
+                    className="flex-1 bg-purple-600 hover:bg-purple-700 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <Users size={16} />
+                    Vermieten
+                  </button>
+                )}
+
+                {property.status === 'rented' && (
+                  <button
+                    disabled
+                    className="flex-1 bg-emerald-600/30 px-3 py-2.5 rounded-lg text-sm font-medium flex items-center justify-center gap-1.5 cursor-default"
+                  >
+                    <CheckCircle size={16} />
+                    Vermietet ✓
+                  </button>
+                )}
+              </div>
+
+              {property.status !== 'rented' && (
+                <button
+                  onClick={() => sellProperty(property.id)}
+                  className="w-full bg-slate-700 hover:bg-slate-600 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
+                >
+                  <DollarSign size={16} />
+                  Verkaufen ({calculateMarketValue(property).toLocaleString('de-DE')} €)
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  // Mieter-Auswahl Modal
+  const TenantModal = () => {
+    if (!showTenantModal || !selectedProperty) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+        <div className="bg-slate-900 rounded-xl border border-slate-800 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+          {/* Modal Header */}
+          <div className="sticky top-0 bg-slate-900 border-b border-slate-800 p-4 lg:p-6 flex items-center justify-between">
+            <div>
+              <h2 className="text-xl lg:text-2xl font-bold">Mieter auswählen</h2>
+              <p className="text-sm text-slate-400 mt-1">{selectedProperty.name}</p>
+            </div>
+            <button
+              onClick={() => setShowTenantModal(false)}
+              className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
+            >
+              <X size={24} />
+            </button>
+          </div>
+
+          {/* Tenant Candidates */}
+          <div className="p-4 lg:p-6 space-y-4">
+            {tenantCandidates.map((tenant) => {
+              const canAfford = selectedProperty.condition >= tenant.minCondition;
+              const actualRent = Math.round(selectedProperty.potentialRent * (tenant.rentOffer / 100));
+              
+              return (
+                <div
+                  key={tenant.id}
+                  className={`border rounded-xl p-4 lg:p-5 transition-colors ${
+                    canAfford 
+                      ? 'border-slate-700 hover:border-emerald-500/50 bg-slate-800/50' 
+                      : 'border-red-500/30 bg-red-500/5'
+                  }`}
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-3 bg-slate-700 rounded-lg">
+                        <User size={24} />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-semibold">{tenant.name}</h3>
+                        <p className="text-sm text-slate-400 capitalize">{tenant.type}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xl font-bold text-emerald-400">{actualRent} €</p>
+                      <p className="text-xs text-slate-500">{tenant.rentOffer}% vom Basis</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 mb-4">
+                    <div className="bg-slate-900 p-3 rounded-lg">
+                      <p className="text-xs text-slate-400 mb-1">Risiko-Level</p>
+                      <div className="flex items-center gap-1">
+                        {[...Array(10)].map((_, i) => (
+                          <div
+                            key={i}
+                            className={`h-2 w-2 rounded-full ${
+                              i < tenant.riskLevel ? 'bg-red-500' : 'bg-slate-700'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    <div className="bg-slate-900 p-3 rounded-lg">
+                      <p className="text-xs text-slate-400 mb-1">Min. Zustand</p>
+                      <p className="text-lg font-bold">{tenant.minCondition}%</p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => selectTenant(tenant)}
+                    disabled={!canAfford}
+                    className={`w-full py-2.5 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 ${
+                      canAfford
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                        : 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                    }`}
+                  >
+                    {canAfford ? (
+                      <>
+                        <CheckCircle size={16} />
+                        Mieter auswählen
+                      </>
+                    ) : (
+                      <>
+                        <AlertCircle size={16} />
+                        Zustand zu niedrig
+                      </>
+                    )}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="border-t border-slate-800 p-4 bg-slate-900">
+            <button
+              onClick={() => setShowTenantModal(false)}
+              className="w-full bg-slate-700 hover:bg-slate-600 py-2.5 rounded-lg font-medium transition-colors"
+            >
+              Abbrechen
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 w-full overflow-x-hidden pb-20 lg:pb-0">
+      {/* Tenant Modal */}
+      <TenantModal />
+
       {/* Header */}
       <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-10">
         <div className="w-full max-w-7xl mx-auto px-4 py-4">
-          {/* Logo und Titel */}
           <div className="flex items-center justify-between mb-4 lg:mb-0">
             <div className="flex items-center gap-2">
               <Building2 className="text-emerald-500" size={28} />
@@ -531,7 +921,6 @@ export default function ImmoTycoon() {
               </div>
             </div>
 
-            {/* Reset Button */}
             <button
               onClick={resetGame}
               className="bg-red-600 hover:bg-red-700 p-2 rounded-lg transition-colors"
@@ -541,9 +930,7 @@ export default function ImmoTycoon() {
             </button>
           </div>
           
-          {/* Stats Grid - 2x2 auf Mobile, horizontal auf Desktop */}
           <div className="grid grid-cols-2 lg:flex lg:items-center gap-2 lg:gap-4">
-            {/* Bargeld */}
             <div className="bg-slate-800 px-3 py-2 rounded-lg border border-slate-700">
               <div className="flex items-center gap-1.5">
                 <Coins className="text-amber-500" size={16} />
@@ -556,7 +943,6 @@ export default function ImmoTycoon() {
               </div>
             </div>
 
-            {/* Cashflow */}
             <div className="bg-slate-800 px-3 py-2 rounded-lg border border-slate-700">
               <div className="flex items-center gap-1.5">
                 <TrendingUp className="text-emerald-500" size={16} />
@@ -569,7 +955,6 @@ export default function ImmoTycoon() {
               </div>
             </div>
 
-            {/* Zeit */}
             <div className="bg-slate-800 px-3 py-2 rounded-lg border border-slate-700">
               <div className="flex items-center gap-1.5">
                 <Calendar className="text-blue-500" size={16} />
@@ -582,7 +967,6 @@ export default function ImmoTycoon() {
               </div>
             </div>
 
-            {/* Next Month Button */}
             <button
               onClick={nextMonth}
               className="bg-emerald-600 hover:bg-emerald-700 px-3 py-2 rounded-lg text-sm lg:text-base font-medium transition-colors flex items-center justify-center gap-1.5"
@@ -595,7 +979,7 @@ export default function ImmoTycoon() {
         </div>
       </header>
 
-      {/* Tab Navigation - Fixiert auf Mobile */}
+      {/* Tab Navigation */}
       <div className="bg-slate-900 border-b border-slate-800 sticky top-[132px] lg:top-[116px] z-10">
         <div className="w-full max-w-7xl mx-auto px-4">
           <div className="flex gap-2">
@@ -632,16 +1016,15 @@ export default function ImmoTycoon() {
 
       {/* Main Content */}
       <div className="w-full max-w-7xl mx-auto px-4 py-6 lg:py-8">
-        {/* Immobilien Tab */}
         {activeTab === 'properties' && (
-          <div className="flex flex-col lg:grid lg:grid-cols-3 gap-6 lg:gap-6">
+          <div className="flex flex-col lg:grid lg:grid-cols-3 gap-6">
             {/* Immobilienmarkt */}
             <div className="lg:col-span-1">
               <div className="flex items-center gap-2 lg:gap-3 mb-4 lg:mb-6">
                 <ShoppingCart className="text-blue-500" size={20} />
                 <h2 className="text-xl lg:text-2xl font-bold">Immobilienmarkt</h2>
                 <span className="bg-slate-800 px-2 py-0.5 lg:px-3 lg:py-1 rounded-full text-xs lg:text-sm text-slate-400">
-                  {marketProperties.length} verfügbar
+                  {marketProperties.length}
                 </span>
               </div>
 
@@ -649,71 +1032,23 @@ export default function ImmoTycoon() {
                 {marketProperties.length === 0 ? (
                   <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 lg:p-8 text-center">
                     <AlertCircle className="mx-auto text-slate-600 mb-3" size={40} />
-                    <p className="text-slate-400 text-sm lg:text-base">Keine Immobilien mehr verfügbar</p>
-                    <p className="text-xs text-slate-500 mt-2">Verwalte dein Portfolio!</p>
+                    <p className="text-slate-400 text-sm lg:text-base">Keine Immobilien verfügbar</p>
                   </div>
                 ) : (
                   marketProperties.map(property => (
-                    <div
-                      key={property.id}
-                      className="bg-slate-900 border border-slate-800 rounded-xl p-4 lg:p-5 hover:border-slate-700 transition-colors"
-                    >
-                      <div className="flex items-start justify-between mb-3 lg:mb-4 gap-2">
-                        <div className="flex-1 min-w-0">
-                          <h3 className="text-base lg:text-lg font-semibold mb-1 truncate">{property.name}</h3>
-                          <StatusBadge status={property.status} />
-                        </div>
-                        <div className="text-right flex-shrink-0">
-                          <p className="text-lg lg:text-2xl font-bold text-emerald-400">
-                            {property.purchasePrice.toLocaleString('de-DE')} €
-                          </p>
-                          <p className="text-[10px] lg:text-xs text-slate-500">Kaufpreis</p>
-                        </div>
-                      </div>
-
-                      <ConditionBar condition={property.condition} />
-
-                      <div className="grid grid-cols-2 gap-2 lg:gap-3 mt-3 lg:mt-4 text-sm">
-                        <div className="bg-slate-800 p-2 lg:p-3 rounded-lg">
-                          <p className="text-slate-400 text-[10px] lg:text-xs mb-1">Renovierung</p>
-                          <p className="font-semibold text-xs lg:text-sm">{getRenovationCost(property.renovationCost).toLocaleString('de-DE')} €</p>
-                        </div>
-                        <div className="bg-slate-800 p-2 lg:p-3 rounded-lg">
-                          <p className="text-slate-400 text-[10px] lg:text-xs mb-1">Potenzielle Miete</p>
-                          <p className="font-semibold text-emerald-400 text-xs lg:text-sm">{property.potentialRent.toLocaleString('de-DE')} €/M</p>
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={() => buyProperty(property)}
-                        disabled={cash < property.purchasePrice}
-                        className="w-full mt-3 lg:mt-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed px-4 py-2.5 lg:py-3 rounded-lg text-sm lg:text-base font-medium transition-colors flex items-center justify-center gap-2"
-                      >
-                        {cash < property.purchasePrice ? (
-                          <>
-                            <AlertCircle size={16} />
-                            Nicht genug Geld
-                          </>
-                        ) : (
-                          <>
-                            <ShoppingCart size={16} />
-                            Kaufen
-                          </>
-                        )}
-                      </button>
-                    </div>
+                    <PropertyCard key={property.id} property={property} isMarket={true} />
                   ))
                 )}
               </div>
             </div>
 
-            {/* Mein Portfolio */}
+            {/* Portfolio */}
             <div className="lg:col-span-1">
               <div className="flex items-center gap-2 lg:gap-3 mb-4 lg:mb-6">
                 <Home className="text-emerald-500" size={20} />
                 <h2 className="text-xl lg:text-2xl font-bold">Mein Portfolio</h2>
                 <span className="bg-slate-800 px-2 py-0.5 lg:px-3 lg:py-1 rounded-full text-xs lg:text-sm text-slate-400">
-                  {portfolio.length} Objekte
+                  {portfolio.length}
                 </span>
               </div>
 
@@ -721,81 +1056,11 @@ export default function ImmoTycoon() {
                 {portfolio.length === 0 ? (
                   <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 lg:p-8 text-center">
                     <Building2 className="mx-auto text-slate-600 mb-3" size={40} />
-                    <p className="text-slate-400 text-sm lg:text-base">Noch keine Immobilien im Portfolio</p>
-                    <p className="text-xs text-slate-500 mt-2">Kaufe deine erste Immobilie!</p>
+                    <p className="text-slate-400 text-sm lg:text-base">Portfolio leer</p>
                   </div>
                 ) : (
                   portfolio.map(property => (
-                    <div
-                      key={property.id}
-                      className="bg-slate-900 border border-slate-800 rounded-xl p-4 lg:p-5"
-                    >
-                      <div className="flex items-start justify-between mb-3 lg:mb-4 gap-2">
-                        <div className="flex-1 min-w-0">
-                          <h3 className="text-base lg:text-lg font-semibold mb-1 truncate">{property.name}</h3>
-                          <StatusBadge status={property.status} />
-                        </div>
-                        {property.status === 'rented' && (
-                          <div className="text-right flex-shrink-0">
-                            <p className="text-lg lg:text-2xl font-bold text-emerald-400">
-                              {(hasUpgrade('marketing') ? Math.round(property.potentialRent * 1.1) : property.potentialRent).toLocaleString('de-DE')} €
-                            </p>
-                            <p className="text-[10px] lg:text-xs text-slate-500">Monatlich</p>
-                          </div>
-                        )}
-                      </div>
-
-                      <ConditionBar condition={property.condition} />
-
-                      <div className="grid grid-cols-2 gap-2 lg:gap-3 mt-3 lg:mt-4 text-sm">
-                        <div className="bg-slate-800 p-2 lg:p-3 rounded-lg">
-                          <p className="text-slate-400 text-[10px] lg:text-xs mb-1">Renovierung nötig</p>
-                          <p className="font-semibold text-xs lg:text-sm">{getRenovationCost(property.renovationCost).toLocaleString('de-DE')} €</p>
-                        </div>
-                        <div className="bg-slate-800 p-2 lg:p-3 rounded-lg">
-                          <p className="text-slate-400 text-[10px] lg:text-xs mb-1">Miete pro Monat</p>
-                          <p className="font-semibold text-emerald-400 text-xs lg:text-sm">
-                            {(hasUpgrade('marketing') ? Math.round(property.potentialRent * 1.1) : property.potentialRent).toLocaleString('de-DE')} €
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex gap-2 mt-3 lg:mt-4">
-                        {/* Renovieren Button */}
-                        {property.condition < 100 && property.status !== 'rented' && (
-                          <button
-                            onClick={() => renovateProperty(property.id)}
-                            disabled={cash < getRenovationCost(property.renovationCost) || property.status === 'renovating'}
-                            className="flex-1 bg-amber-600 hover:bg-amber-700 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed px-3 lg:px-4 py-2.5 lg:py-3 rounded-lg text-sm lg:text-base font-medium transition-colors flex items-center justify-center gap-1.5 lg:gap-2"
-                          >
-                            <Hammer size={16} />
-                            <span className="truncate">{property.status === 'renovating' ? 'Wird renoviert...' : 'Renovieren'}</span>
-                          </button>
-                        )}
-
-                        {/* Vermieten Button */}
-                        {property.condition === 100 && property.status !== 'rented' && (
-                          <button
-                            onClick={() => rentProperty(property.id)}
-                            className="flex-1 bg-purple-600 hover:bg-purple-700 px-3 lg:px-4 py-2.5 lg:py-3 rounded-lg text-sm lg:text-base font-medium transition-colors flex items-center justify-center gap-1.5 lg:gap-2"
-                          >
-                            <Users size={16} />
-                            Vermieten
-                          </button>
-                        )}
-
-                        {/* Vermietet Status */}
-                        {property.status === 'rented' && (
-                          <button
-                            disabled
-                            className="flex-1 bg-emerald-600/30 px-3 lg:px-4 py-2.5 lg:py-3 rounded-lg text-sm lg:text-base font-medium flex items-center justify-center gap-1.5 lg:gap-2 cursor-default"
-                          >
-                            <CheckCircle size={16} />
-                            Vermietet ✓
-                          </button>
-                        )}
-                      </div>
-                    </div>
+                    <PropertyCard key={property.id} property={property} isMarket={false} />
                   ))
                 )}
               </div>
@@ -806,17 +1071,13 @@ export default function ImmoTycoon() {
               <div className="flex items-center gap-2 lg:gap-3 mb-4 lg:mb-6">
                 <ScrollText className="text-purple-500" size={20} />
                 <h2 className="text-xl lg:text-2xl font-bold">Ereignisse</h2>
-                <span className="bg-slate-800 px-2 py-0.5 lg:px-3 lg:py-1 rounded-full text-xs lg:text-sm text-slate-400">
-                  {eventLog.length}
-                </span>
               </div>
 
               <div className="space-y-3">
                 {eventLog.length === 0 ? (
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 lg:p-8 text-center">
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 text-center">
                     <ScrollText className="mx-auto text-slate-600 mb-3" size={40} />
-                    <p className="text-slate-400 text-sm lg:text-base">Noch keine Ereignisse</p>
-                    <p className="text-xs text-slate-500 mt-2">Spiele, um Events zu erleben!</p>
+                    <p className="text-slate-400 text-sm">Keine Ereignisse</p>
                   </div>
                 ) : (
                   eventLog.map(event => (
@@ -839,7 +1100,6 @@ export default function ImmoTycoon() {
                 )}
               </div>
 
-              {/* Active Upgrades Info */}
               {upgrades.filter(u => u.purchased).length > 0 && (
                 <div className="mt-6 bg-slate-900 border border-emerald-500/30 rounded-xl p-4">
                   <h3 className="text-sm font-semibold text-emerald-400 mb-2 flex items-center gap-2">
@@ -860,7 +1120,6 @@ export default function ImmoTycoon() {
           </div>
         )}
 
-        {/* Shop Tab */}
         {activeTab === 'shop' && (
           <div className="max-w-4xl mx-auto">
             <div className="flex items-center gap-3 mb-6">
@@ -934,32 +1193,6 @@ export default function ImmoTycoon() {
                   </div>
                 );
               })}
-            </div>
-
-            {/* Shop Info */}
-            <div className="mt-8 bg-slate-900 border border-slate-800 rounded-xl p-6">
-              <h3 className="text-lg font-semibold text-slate-300 mb-3 flex items-center gap-2">
-                <AlertCircle size={20} className="text-blue-400" />
-                Upgrade-Informationen
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-slate-400">
-                <div>
-                  <p className="font-semibold text-slate-300 mb-2">Billige Arbeitskräfte</p>
-                  <p>Reduziert alle Renovierungskosten um 20%. Spart Geld bei jeder Renovierung.</p>
-                </div>
-                <div>
-                  <p className="font-semibold text-slate-300 mb-2">Aggressives Marketing</p>
-                  <p>Erhöht alle Mieteinnahmen um 10%. Gilt für alle aktuellen und zukünftigen Mieter.</p>
-                </div>
-                <div>
-                  <p className="font-semibold text-slate-300 mb-2">Bauleiter</p>
-                  <p>Renoviert automatisch ein Objekt pro Monat um 30%. Spart Zeit und Klicks!</p>
-                </div>
-                <div>
-                  <p className="font-semibold text-slate-300 mb-2">Versicherung</p>
-                  <p>Verhindert alle negativen Events. Schützt vor Verlusten und unerwarteten Kosten.</p>
-                </div>
-              </div>
             </div>
           </div>
         )}
