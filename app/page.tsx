@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Building2, 
   Coins, 
@@ -11,7 +11,9 @@ import {
   ShoppingCart,
   Users,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  Trash2,
+  ScrollText
 } from 'lucide-react';
 
 // Typen
@@ -27,55 +29,217 @@ interface Property {
   status: PropertyStatus;
 }
 
+interface GameEvent {
+  id: number;
+  message: string;
+  type: 'positive' | 'negative' | 'neutral';
+  timestamp: number;
+}
+
+interface GameState {
+  cash: number;
+  day: number;
+  week: number;
+  monthlyIncome: number;
+  portfolio: Property[];
+  marketProperties: Property[];
+  eventLog: GameEvent[];
+}
+
+const INITIAL_MARKET_PROPERTIES: Property[] = [
+  {
+    id: 1,
+    name: '🚗 Winzige Garage',
+    purchasePrice: 8000,
+    condition: 30,
+    renovationCost: 2000,
+    potentialRent: 250,
+    status: 'for_sale'
+  },
+  {
+    id: 2,
+    name: '🏚️ Verschimmeltes Apartment',
+    purchasePrice: 15000,
+    condition: 20,
+    renovationCost: 5000,
+    potentialRent: 650,
+    status: 'for_sale'
+  },
+  {
+    id: 3,
+    name: '🏠 Altes Reihenhaus',
+    purchasePrice: 22000,
+    condition: 40,
+    renovationCost: 8000,
+    potentialRent: 1200,
+    status: 'for_sale'
+  },
+  {
+    id: 4,
+    name: '🏢 Heruntergekommenes Loft',
+    purchasePrice: 35000,
+    condition: 25,
+    renovationCost: 12000,
+    potentialRent: 1800,
+    status: 'for_sale'
+  }
+];
+
+const EVENTS = [
+  { message: '🎉 Marktboom! Alle Mieten steigen um 10%', type: 'positive' as const, effect: 'rent_increase' },
+  { message: '📈 Wirtschaftswachstum! +2000 € Bonus', type: 'positive' as const, effect: 'bonus' },
+  { message: '⚡ Glückstreffer! Ein Mieter zahlt doppelt', type: 'positive' as const, effect: 'double_rent' },
+  { message: '🌧️ Sturmschaden an einer Immobilie! -800 €', type: 'negative' as const, effect: 'storm_damage' },
+  { message: '🚫 Mieter ausgezogen (zufälliges Objekt)', type: 'negative' as const, effect: 'tenant_leaves' },
+  { message: '💸 Unerwartete Reparaturen! -1200 €', type: 'negative' as const, effect: 'repair_cost' },
+  { message: '📉 Rezession! Mieten sinken um 5%', type: 'negative' as const, effect: 'rent_decrease' },
+  { message: '🔧 Kostenlose Renovierung von der Stadt', type: 'positive' as const, effect: 'free_renovation' },
+  { message: '📊 Stabiler Monat - Keine besonderen Ereignisse', type: 'neutral' as const, effect: 'none' }
+];
+
 export default function ImmoTycoon() {
   // Globaler Spiel-Status
   const [cash, setCash] = useState(25000);
   const [day, setDay] = useState(1);
   const [week, setWeek] = useState(1);
   const [monthlyIncome, setMonthlyIncome] = useState(0);
-
-  // Immobilien am Markt
-  const [marketProperties, setMarketProperties] = useState<Property[]>([
-    {
-      id: 1,
-      name: '🚗 Winzige Garage',
-      purchasePrice: 8000,
-      condition: 30,
-      renovationCost: 2000,
-      potentialRent: 250,
-      status: 'for_sale'
-    },
-    {
-      id: 2,
-      name: '🏚️ Verschimmeltes Apartment',
-      purchasePrice: 15000,
-      condition: 20,
-      renovationCost: 5000,
-      potentialRent: 650,
-      status: 'for_sale'
-    },
-    {
-      id: 3,
-      name: '🏠 Altes Reihenhaus',
-      purchasePrice: 22000,
-      condition: 40,
-      renovationCost: 8000,
-      potentialRent: 1200,
-      status: 'for_sale'
-    },
-    {
-      id: 4,
-      name: '🏢 Heruntergekommenes Loft',
-      purchasePrice: 35000,
-      condition: 25,
-      renovationCost: 12000,
-      potentialRent: 1800,
-      status: 'for_sale'
-    }
-  ]);
-
-  // Spieler Portfolio
   const [portfolio, setPortfolio] = useState<Property[]>([]);
+  const [marketProperties, setMarketProperties] = useState<Property[]>(INITIAL_MARKET_PROPERTIES);
+  const [eventLog, setEventLog] = useState<GameEvent[]>([]);
+  const [eventCounter, setEventCounter] = useState(1);
+
+  // LocalStorage laden beim Start
+  useEffect(() => {
+    const savedGame = localStorage.getItem('immoTycoonSave');
+    if (savedGame) {
+      try {
+        const gameState: GameState = JSON.parse(savedGame);
+        setCash(gameState.cash);
+        setDay(gameState.day);
+        setWeek(gameState.week);
+        setMonthlyIncome(gameState.monthlyIncome);
+        setPortfolio(gameState.portfolio);
+        setMarketProperties(gameState.marketProperties);
+        setEventLog(gameState.eventLog || []);
+        addEventToLog('💾 Spielstand geladen!', 'neutral');
+      } catch (error) {
+        console.error('Fehler beim Laden:', error);
+      }
+    }
+  }, []);
+
+  // LocalStorage speichern bei jeder Änderung
+  useEffect(() => {
+    const gameState: GameState = {
+      cash,
+      day,
+      week,
+      monthlyIncome,
+      portfolio,
+      marketProperties,
+      eventLog
+    };
+    localStorage.setItem('immoTycoonSave', JSON.stringify(gameState));
+  }, [cash, day, week, monthlyIncome, portfolio, marketProperties, eventLog]);
+
+  // Event zum Log hinzufügen
+  const addEventToLog = (message: string, type: 'positive' | 'negative' | 'neutral') => {
+    const newEvent: GameEvent = {
+      id: eventCounter,
+      message,
+      type,
+      timestamp: Date.now()
+    };
+    setEventCounter(eventCounter + 1);
+    setEventLog(prev => [newEvent, ...prev].slice(0, 5)); // Nur die letzten 5 Events
+  };
+
+  // Monatliches Einkommen berechnen
+  const calculateMonthlyIncome = () => {
+    const rentedProperties = portfolio.filter(p => p.status === 'rented');
+    return rentedProperties.reduce((sum, p) => sum + p.potentialRent, 0);
+  };
+
+  // Event auslösen
+  const triggerRandomEvent = () => {
+    // 30% Chance auf ein Event
+    if (Math.random() > 0.3) return;
+
+    const event = EVENTS[Math.floor(Math.random() * EVENTS.length)];
+    addEventToLog(event.message, event.type);
+
+    // Event-Effekte anwenden
+    switch (event.effect) {
+      case 'rent_increase':
+        setPortfolio(prev => prev.map(p => ({
+          ...p,
+          potentialRent: Math.round(p.potentialRent * 1.1)
+        })));
+        break;
+      
+      case 'bonus':
+        setCash(prev => prev + 2000);
+        break;
+      
+      case 'double_rent':
+        const rentedProps = portfolio.filter(p => p.status === 'rented');
+        if (rentedProps.length > 0) {
+          const doubleRent = rentedProps.reduce((sum, p) => sum + p.potentialRent, 0);
+          setCash(prev => prev + doubleRent);
+        }
+        break;
+      
+      case 'storm_damage':
+        setCash(prev => Math.max(0, prev - 800));
+        break;
+      
+      case 'tenant_leaves':
+        const rentedProperties = portfolio.filter(p => p.status === 'rented');
+        if (rentedProperties.length > 0) {
+          const randomProp = rentedProperties[Math.floor(Math.random() * rentedProperties.length)];
+          setPortfolio(prev => prev.map(p => 
+            p.id === randomProp.id ? { ...p, status: 'owned' as PropertyStatus } : p
+          ));
+        }
+        break;
+      
+      case 'repair_cost':
+        setCash(prev => Math.max(0, prev - 1200));
+        break;
+      
+      case 'rent_decrease':
+        setPortfolio(prev => prev.map(p => ({
+          ...p,
+          potentialRent: Math.round(p.potentialRent * 0.95)
+        })));
+        break;
+      
+      case 'free_renovation':
+        const ownedProps = portfolio.filter(p => p.condition < 100 && p.status === 'owned');
+        if (ownedProps.length > 0) {
+          const randomProp = ownedProps[Math.floor(Math.random() * ownedProps.length)];
+          setPortfolio(prev => prev.map(p => 
+            p.id === randomProp.id ? { ...p, condition: 100 } : p
+          ));
+        }
+        break;
+    }
+  };
+
+  // Spielstand zurücksetzen
+  const resetGame = () => {
+    if (confirm('Möchtest du wirklich neu starten? Der aktuelle Spielstand geht verloren!')) {
+      localStorage.removeItem('immoTycoonSave');
+      setCash(25000);
+      setDay(1);
+      setWeek(1);
+      setMonthlyIncome(0);
+      setPortfolio([]);
+      setMarketProperties(INITIAL_MARKET_PROPERTIES);
+      setEventLog([]);
+      addEventToLog('🎮 Neues Spiel gestartet!', 'neutral');
+    }
+  };
 
   // Kaufen-Funktion
   const buyProperty = (property: Property) => {
@@ -83,6 +247,7 @@ export default function ImmoTycoon() {
       setCash(cash - property.purchasePrice);
       setPortfolio([...portfolio, { ...property, status: 'owned' }]);
       setMarketProperties(marketProperties.filter(p => p.id !== property.id));
+      addEventToLog(`🏠 ${property.name} gekauft für ${property.purchasePrice.toLocaleString('de-DE')} €`, 'positive');
     }
   };
 
@@ -98,6 +263,8 @@ export default function ImmoTycoon() {
           ? { ...p, condition: Math.min(100, p.condition + 25), status: 'renovating' as PropertyStatus }
           : p
       ));
+
+      addEventToLog(`🔨 ${property.name} wird renoviert (+25%)`, 'neutral');
 
       // Nach kurzer "Arbeit" wieder auf owned setzen
       setTimeout(() => {
@@ -123,21 +290,31 @@ export default function ImmoTycoon() {
         : p
     ));
 
-    // Monatliches Einkommen aktualisieren
-    setMonthlyIncome(monthlyIncome + property.potentialRent);
+    addEventToLog(`👥 ${property.name} erfolgreich vermietet (+${property.potentialRent} €/Monat)`, 'positive');
   };
 
   // Zeit voranschreiten
   const nextMonth = () => {
     // Mieteinnahmen gutschreiben
-    const rentedProperties = portfolio.filter(p => p.status === 'rented');
-    const totalRent = rentedProperties.reduce((sum, p) => sum + p.potentialRent, 0);
+    const totalRent = calculateMonthlyIncome();
     setCash(cash + totalRent);
 
     // Zeit aktualisieren
     setDay(day + 30);
     setWeek(week + 4);
+
+    // Event auslösen (30% Chance)
+    triggerRandomEvent();
+
+    if (totalRent > 0) {
+      addEventToLog(`💰 Mieteinnahmen: +${totalRent.toLocaleString('de-DE')} €`, 'positive');
+    }
   };
+
+  // Monatliches Einkommen aktualisieren
+  useEffect(() => {
+    setMonthlyIncome(calculateMonthlyIncome());
+  }, [portfolio]);
 
   // Status-Badge Komponente
   const StatusBadge = ({ status }: { status: PropertyStatus }) => {
@@ -185,12 +362,23 @@ export default function ImmoTycoon() {
       <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-10">
         <div className="w-full max-w-7xl mx-auto px-4 py-4">
           {/* Logo und Titel */}
-          <div className="flex items-center gap-2 mb-4 lg:mb-0">
-            <Building2 className="text-emerald-500" size={28} />
-            <div>
-              <h1 className="text-xl lg:text-2xl font-bold text-slate-100">ImmoTycoon</h1>
-              <p className="text-xs text-slate-400 hidden sm:block">Dein Immobilien-Imperium</p>
+          <div className="flex items-center justify-between mb-4 lg:mb-0">
+            <div className="flex items-center gap-2">
+              <Building2 className="text-emerald-500" size={28} />
+              <div>
+                <h1 className="text-xl lg:text-2xl font-bold text-slate-100">ImmoTycoon</h1>
+                <p className="text-xs text-slate-400 hidden sm:block">Dein Immobilien-Imperium</p>
+              </div>
             </div>
+
+            {/* Reset Button */}
+            <button
+              onClick={resetGame}
+              className="bg-red-600 hover:bg-red-700 p-2 rounded-lg transition-colors"
+              title="Spiel zurücksetzen"
+            >
+              <Trash2 size={18} />
+            </button>
           </div>
           
           {/* Stats Grid - 2x2 auf Mobile, horizontal auf Desktop */}
@@ -249,9 +437,9 @@ export default function ImmoTycoon() {
 
       {/* Main Content */}
       <div className="w-full max-w-7xl mx-auto px-4 py-6 lg:py-8">
-        <div className="flex flex-col lg:grid lg:grid-cols-2 gap-6 lg:gap-8">
+        <div className="flex flex-col lg:grid lg:grid-cols-3 gap-6 lg:gap-6">
           {/* Immobilienmarkt */}
-          <div>
+          <div className="lg:col-span-1">
             <div className="flex items-center gap-2 lg:gap-3 mb-4 lg:mb-6">
               <ShoppingCart className="text-blue-500" size={20} />
               <h2 className="text-xl lg:text-2xl font-bold">Immobilienmarkt</h2>
@@ -323,7 +511,7 @@ export default function ImmoTycoon() {
           </div>
 
           {/* Mein Portfolio */}
-          <div>
+          <div className="lg:col-span-1">
             <div className="flex items-center gap-2 lg:gap-3 mb-4 lg:mb-6">
               <Home className="text-emerald-500" size={20} />
               <h2 className="text-xl lg:text-2xl font-bold">Mein Portfolio</h2>
@@ -411,6 +599,60 @@ export default function ImmoTycoon() {
                   </div>
                 ))
               )}
+            </div>
+          </div>
+
+          {/* Event Log */}
+          <div className="lg:col-span-1">
+            <div className="flex items-center gap-2 lg:gap-3 mb-4 lg:mb-6">
+              <ScrollText className="text-purple-500" size={20} />
+              <h2 className="text-xl lg:text-2xl font-bold">Ereignisse</h2>
+              <span className="bg-slate-800 px-2 py-0.5 lg:px-3 lg:py-1 rounded-full text-xs lg:text-sm text-slate-400">
+                {eventLog.length}
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              {eventLog.length === 0 ? (
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 lg:p-8 text-center">
+                  <ScrollText className="mx-auto text-slate-600 mb-3" size={40} />
+                  <p className="text-slate-400 text-sm lg:text-base">Noch keine Ereignisse</p>
+                  <p className="text-xs text-slate-500 mt-2">Spiele, um Events zu erleben!</p>
+                </div>
+              ) : (
+                eventLog.map(event => (
+                  <div
+                    key={event.id}
+                    className={`bg-slate-900 border rounded-xl p-3 lg:p-4 ${
+                      event.type === 'positive' 
+                        ? 'border-emerald-500/30 bg-emerald-500/5' 
+                        : event.type === 'negative'
+                        ? 'border-red-500/30 bg-red-500/5'
+                        : 'border-slate-800'
+                    }`}
+                  >
+                    <p className="text-xs lg:text-sm text-slate-300">{event.message}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      {new Date(event.timestamp).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Info Box */}
+            <div className="mt-6 bg-slate-900 border border-slate-800 rounded-xl p-4">
+              <h3 className="text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
+                <AlertCircle size={16} className="text-blue-400" />
+                Spiel-Info
+              </h3>
+              <ul className="text-xs text-slate-400 space-y-1">
+                <li>• Kaufe heruntergekommene Immobilien</li>
+                <li>• Renoviere sie auf 100% Zustand</li>
+                <li>• Vermiete sie für passives Einkommen</li>
+                <li>• 30% Chance auf Events pro Monat</li>
+                <li>• Spielstand wird automatisch gespeichert</li>
+              </ul>
             </div>
           </div>
         </div>
