@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
   Building2, 
   Coins, 
@@ -22,12 +22,15 @@ import {
   DollarSign,
   X,
   User,
-  Star
+  Star,
+  Landmark,
+  TrendingDown,
+  PiggyBank
 } from 'lucide-react';
 
 // Typen
 type PropertyStatus = 'for_sale' | 'owned' | 'renovating' | 'rented';
-type TabType = 'properties' | 'shop';
+type TabType = 'properties' | 'shop' | 'finance';
 type IconType = React.ComponentType<{ size?: number; className?: string }>;
 
 interface Property {
@@ -80,6 +83,7 @@ interface GameState {
   upgrades: Upgrade[];
   eventCounter: number;
   nextPropertyId?: number;
+  debt?: number; // Schulden/Kredite
 }
 
 const INITIAL_MARKET_PROPERTIES: Property[] = [
@@ -203,9 +207,10 @@ export default function ImmoTycoon() {
   const [portfolio, setPortfolio] = useState<Property[]>([]);
   const [marketProperties, setMarketProperties] = useState<Property[]>(INITIAL_MARKET_PROPERTIES);
   const [eventLog, setEventLog] = useState<GameEvent[]>([]);
-  const [eventCounter, setEventCounter] = useState(1);
+  const eventCounterRef = useRef(1); // Ref statt State für sofortige Aktualisierung
   const [upgrades, setUpgrades] = useState<Upgrade[]>(INITIAL_UPGRADES);
   const [nextPropertyId, setNextPropertyId] = useState(100); // Für eindeutige IDs
+  const [debt, setDebt] = useState(0); // Schulden
 
   // Icon-Mapping Funktion
   const getIconComponent = (iconName: string): IconType => {
@@ -256,32 +261,28 @@ export default function ImmoTycoon() {
         setPortfolio(gameState.portfolio.map(ensureImageUrl));
         setMarketProperties(gameState.marketProperties.map(ensureImageUrl));
         
-        // EventCounter richtig setzen (höchste ID + 1)
+        // EventCounter richtig setzen (gespeicherten Wert bevorzugen)
         let nextCounter = 1;
-        if (gameState.eventLog && gameState.eventLog.length > 0) {
+        if (gameState.eventCounter) {
+          // Bevorzuge den gespeicherten Counter-Wert
+          nextCounter = gameState.eventCounter;
+        } else if (gameState.eventLog && gameState.eventLog.length > 0) {
+          // Fallback: Berechne aus dem Event Log
           const maxId = Math.max(...gameState.eventLog.map(e => e.id));
           nextCounter = maxId + 1;
-        } else if (gameState.eventCounter) {
-          nextCounter = gameState.eventCounter;
         }
-        setEventCounter(nextCounter);
         
         // Property ID Counter laden
         if (gameState.nextPropertyId) {
           setNextPropertyId(gameState.nextPropertyId);
         }
         
-        // Event Log mit "Geladen"-Nachricht setzen
-        const loadEvent: GameEvent = {
-          id: nextCounter,
-          message: '💾 Spielstand geladen!',
-          type: 'neutral',
-          timestamp: Date.now()
-        };
-        setEventLog([loadEvent, ...(gameState.eventLog || [])].slice(0, 5));
-        setEventCounter(nextCounter + 1);
+        // Event Log laden (OHNE "Geladen"-Nachricht, um Duplikate zu vermeiden)
+        setEventLog(gameState.eventLog || []);
+        eventCounterRef.current = nextCounter; // Ref statt State
         
         setUpgrades(gameState.upgrades || INITIAL_UPGRADES);
+        setDebt(gameState.debt || 0);
       } catch (error) {
         console.error('Fehler beim Laden:', error);
       }
@@ -299,11 +300,12 @@ export default function ImmoTycoon() {
       marketProperties,
       eventLog,
       upgrades,
-      eventCounter,
-      nextPropertyId
+      eventCounter: eventCounterRef.current, // Ref-Wert speichern
+      nextPropertyId,
+      debt
     };
     localStorage.setItem('immoTycoonSave', JSON.stringify(gameState));
-  }, [cash, day, week, monthlyIncome, portfolio, marketProperties, eventLog, upgrades, eventCounter, nextPropertyId]);
+  }, [cash, day, week, monthlyIncome, portfolio, marketProperties, eventLog, upgrades, nextPropertyId, debt]);
 
   // Hilfsfunktion: Prüfe ob Upgrade gekauft wurde
   const hasUpgrade = (upgradeId: string) => {
@@ -313,12 +315,12 @@ export default function ImmoTycoon() {
   // Event zum Log hinzufügen
   const addEventToLog = (message: string, type: 'positive' | 'negative' | 'neutral') => {
     const newEvent: GameEvent = {
-      id: eventCounter,
+      id: eventCounterRef.current,
       message,
       type,
       timestamp: Date.now()
     };
-    setEventCounter(eventCounter + 1);
+    eventCounterRef.current = eventCounterRef.current + 1; // Sofort erhöhen
     setEventLog(prev => [newEvent, ...prev].slice(0, 5));
   };
 
@@ -474,6 +476,8 @@ export default function ImmoTycoon() {
       setEventLog([]);
       setUpgrades(INITIAL_UPGRADES);
       setNextPropertyId(100);
+      setDebt(0);
+      eventCounterRef.current = 1; // Ref zurücksetzen
       addEventToLog('🎮 Neues Spiel gestartet!', 'neutral');
     }
   };
@@ -599,18 +603,77 @@ export default function ImmoTycoon() {
     addEventToLog(`✨ Upgrade gekauft: ${upgrade.name}`, 'positive');
   };
 
+  // Kredit aufnehmen
+  const takeOutLoan = (amount: number = 5000) => {
+    setDebt(debt + amount);
+    setCash(cash + amount);
+    addEventToLog(`🏦 Kredit aufgenommen: +${amount.toLocaleString('de-DE')} €`, 'neutral');
+  };
+
+  // Kredit zurückzahlen
+  const repayLoan = (amount: number = 5000) => {
+    const actualAmount = Math.min(amount, debt, cash);
+    if (actualAmount <= 0) return;
+    
+    setDebt(debt - actualAmount);
+    setCash(cash - actualAmount);
+    addEventToLog(`💰 Kredit zurückgezahlt: -${actualAmount.toLocaleString('de-DE')} €`, 'positive');
+  };
+
+  // Monatliche Zinsen berechnen (5% pro Monat)
+  const calculateInterest = () => {
+    return Math.round(debt * 0.05);
+  };
+
+  // Immobilienvermögen berechnen
+  const calculatePropertyValue = () => {
+    return portfolio.reduce((sum, p) => sum + calculateMarketValue(p), 0);
+  };
+
+  // Nettovermögen berechnen
+  const calculateNetWorth = () => {
+    return cash + calculatePropertyValue() - debt;
+  };
+
+  // Verschuldungsgrad berechnen (0-100%)
+  const calculateLeverageRatio = () => {
+    const propertyValue = calculatePropertyValue();
+    if (propertyValue === 0) return 0;
+    return Math.min(100, Math.round((debt / propertyValue) * 100));
+  };
+
   // Zeit voranschreiten
   const nextMonth = () => {
     autoRenovate();
     const totalRent = calculateMonthlyIncome();
-    setCash(cash + totalRent);
+    
+    // Zinsen berechnen und abziehen
+    const interest = calculateInterest();
+    const netCashflow = totalRent - interest;
+    
+    setCash(cash + netCashflow);
     setDay(day + 30);
     setWeek(week + 4);
     triggerRandomEvent();
 
-    if (totalRent > 0) {
-      addEventToLog(`💰 Mieteinnahmen: +${totalRent.toLocaleString('de-DE')} €`, 'positive');
+    // Cashflow-Nachricht
+    if (totalRent > 0 || interest > 0) {
+      let message = '';
+      if (totalRent > 0) message += `💰 Miete: +${totalRent.toLocaleString('de-DE')} €`;
+      if (interest > 0) {
+        if (message) message += ' | ';
+        message += `📉 Zinsen: -${interest.toLocaleString('de-DE')} €`;
+      }
+      addEventToLog(message, netCashflow >= 0 ? 'positive' : 'negative');
     }
+
+    // Game Over Check (nach 1 Frame delay damit UI aktualisiert wird)
+    setTimeout(() => {
+      if (cash + netCashflow < -5000) {
+        alert('⚠️ BANKROTT! Du hast mehr als 5.000 € Schulden und kein Bargeld mehr. Das Spiel ist vorbei!');
+        resetGame();
+      }
+    }, 100);
   };
 
   // Monatliches Einkommen aktualisieren
@@ -1010,6 +1073,22 @@ export default function ImmoTycoon() {
                 </span>
               )}
             </button>
+            <button
+              onClick={() => setActiveTab('finance')}
+              className={`flex-1 lg:flex-none px-6 py-3 font-medium transition-colors flex items-center justify-center gap-2 border-b-2 ${
+                activeTab === 'finance'
+                  ? 'border-emerald-500 text-emerald-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-300'
+              }`}
+            >
+              <Landmark size={18} />
+              <span>Bank</span>
+              {debt > 0 && (
+                <span className="bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">
+                  {Math.round(debt / 1000)}k
+                </span>
+              )}
+            </button>
           </div>
         </div>
       </div>
@@ -1193,6 +1272,150 @@ export default function ImmoTycoon() {
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {/* Finance Tab */}
+        {activeTab === 'finance' && (
+          <div className="max-w-4xl mx-auto">
+            <div className="flex items-center gap-3 mb-6">
+              <Landmark className="text-emerald-500" size={24} />
+              <h2 className="text-2xl font-bold">Finanzen & Bank</h2>
+            </div>
+
+            {/* Finanz-Übersicht */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-amber-500/20 rounded-lg">
+                    <Coins className="text-amber-500" size={20} />
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-400">Bargeld</p>
+                    <p className="text-2xl font-bold text-slate-100">{cash.toLocaleString('de-DE')} €</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-emerald-500/20 rounded-lg">
+                    <Building2 className="text-emerald-500" size={20} />
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-400">Immobilienvermögen</p>
+                    <p className="text-2xl font-bold text-emerald-400">{calculatePropertyValue().toLocaleString('de-DE')} €</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-red-500/20 rounded-lg">
+                    <TrendingDown className="text-red-500" size={20} />
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-400">Offene Kredite</p>
+                    <p className="text-2xl font-bold text-red-400">{debt.toLocaleString('de-DE')} €</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-purple-500/20 rounded-lg">
+                    <PiggyBank className="text-purple-500" size={20} />
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-400">Nettovermögen</p>
+                    <p className={`text-2xl font-bold ${calculateNetWorth() >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {calculateNetWorth().toLocaleString('de-DE')} €
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Verschuldungsgrad */}
+            {calculatePropertyValue() > 0 && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 mb-8">
+                <h3 className="text-lg font-semibold mb-3">Verschuldungsgrad</h3>
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-400">Schulden / Immobilienwert</span>
+                    <span className="font-semibold">{calculateLeverageRatio()}%</span>
+                  </div>
+                  <div className="w-full h-3 bg-slate-700 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full transition-all duration-500 ${
+                        calculateLeverageRatio() > 70 ? 'bg-red-500' : 
+                        calculateLeverageRatio() > 40 ? 'bg-amber-500' : 
+                        'bg-emerald-500'
+                      }`}
+                      style={{ width: `${calculateLeverageRatio()}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-slate-500 mt-2">
+                    {calculateLeverageRatio() > 70 ? '⚠️ Hohes Risiko' : 
+                     calculateLeverageRatio() > 40 ? '⚡ Moderates Risiko' : 
+                     '✅ Niedriges Risiko'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Monatliche Zinslast */}
+            {debt > 0 && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-5 mb-8">
+                <div className="flex items-center gap-3">
+                  <AlertCircle className="text-red-400" size={24} />
+                  <div>
+                    <p className="text-sm font-semibold text-red-400">Monatliche Zinslast</p>
+                    <p className="text-xs text-slate-400">5% deiner Schulden werden jeden Monat fällig</p>
+                    <p className="text-lg font-bold text-red-400 mt-1">-{calculateInterest().toLocaleString('de-DE')} € pro Monat</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Kredit-Aktionen */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <Landmark size={20} />
+                Kredit-Management
+              </h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <button
+                  onClick={() => takeOutLoan(5000)}
+                  className="bg-emerald-600 hover:bg-emerald-700 px-6 py-4 rounded-lg font-medium transition-colors flex flex-col items-center gap-2"
+                >
+                  <TrendingUp size={24} />
+                  <span>Kredit aufnehmen</span>
+                  <span className="text-sm opacity-80">+5.000 €</span>
+                </button>
+
+                <button
+                  onClick={() => repayLoan(5000)}
+                  disabled={debt === 0 || cash < 5000}
+                  className="bg-amber-600 hover:bg-amber-700 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed px-6 py-4 rounded-lg font-medium transition-colors flex flex-col items-center gap-2"
+                >
+                  <TrendingDown size={24} />
+                  <span>Kredit zurückzahlen</span>
+                  <span className="text-sm opacity-80">-5.000 €</span>
+                </button>
+              </div>
+
+              <div className="mt-6 p-4 bg-slate-800 rounded-lg">
+                <p className="text-xs text-slate-400 mb-2">💡 Hinweise zum Kredit-System:</p>
+                <ul className="text-xs text-slate-400 space-y-1">
+                  <li>• Kredite kosten 5% Zinsen pro Monat</li>
+                  <li>• Nutze Kredite, um schneller zu expandieren</li>
+                  <li>• Achte auf deinen Cashflow (Miete - Zinsen)</li>
+                  <li>• Bei unter -5.000 € Bargeld: BANKROTT!</li>
+                </ul>
+              </div>
             </div>
           </div>
         )}
